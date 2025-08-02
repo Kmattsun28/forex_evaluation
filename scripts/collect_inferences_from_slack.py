@@ -1,221 +1,130 @@
 # scripts/collect_inferences_from_slack.py
 
 import os
-import sys
-import logging
-from datetime import datetime
-from typing import List, Optional
+import time
 import requests
-
-# プロジェクトのルートディレクトリをPythonパスに追加
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from sqlalchemy.orm import Session
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
+from datetime import datetime, timedelta
 
-from app.database import SessionLocal, create_tables
-from app import crud, schemas
-from app.engine.inference_engine import InferenceEngine
+# 親ディレクトリをPythonパスに追加
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# ログ設定
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from app import crud, database
+from app.schemas import TradeInferenceCreate
 
-class SlackInferenceCollector:
-    """
-    Slackから推論ログを収集するクラス
-    """
-    
-    def __init__(self):
-        self.slack_token = os.getenv("SLACK_BOT_TOKEN")
-        self.channel_id = os.getenv("SLACK_CHANNEL_ID")
-        
-        if not self.slack_token or not self.channel_id:
-            raise ValueError("SLACK_BOT_TOKEN and SLACK_CHANNEL_ID must be set in environment variables")
-        
-        self.client = WebClient(token=self.slack_token)
-        self.inference_engine = InferenceEngine()
-    
-    def collect_new_inferences(self, lookback_hours: int = 24) -> int:
-        """
-        指定時間内の新しい推論メッセージを収集
-        
-        Args:
-            lookback_hours: 遡る時間（時間単位）
-            
-        Returns:
-            収集した新しい推論の数
-        """
-        logger.info(f"Starting inference collection for the last {lookback_hours} hours")
-        
-        # データベースセッションを取得
-        db = SessionLocal()
-        try:
-            # 既存の推論メッセージIDを取得
-            existing_ts = self._get_existing_message_timestamps(db)
-            logger.info(f"Found {len(existing_ts)} existing inference records")
-            
-            # Slackからメッセージを取得
-            messages = self._fetch_slack_messages(lookback_hours)
-            logger.info(f"Fetched {len(messages)} messages from Slack")
-            
-            new_inferences_count = 0
-            
-            for message in messages:
-                message_ts = message.get('ts')
-                
-                # 既に処理済みのメッセージはスキップ
-                if message_ts in existing_ts:
-                    continue
-                
-                # 推論メッセージとして処理
-                inference_data = self._process_message(message)
-                if inference_data:
-                    try:
-                        crud.create_trade_inference(db, inference_data)
-                        new_inferences_count += 1
-                        logger.info(f"Created new inference record for message {message_ts}")
-                    except Exception as e:
-                        logger.error(f"Failed to create inference for message {message_ts}: {e}")
-            
-            logger.info(f"Successfully collected {new_inferences_count} new inferences")
-            return new_inferences_count
-            
-        except Exception as e:
-            logger.error(f"Error during inference collection: {e}")
-            raise
-        finally:
-            db.close()
-    
-    def _get_existing_message_timestamps(self, db: Session) -> set:
-        """
-        既存の推論レコードのSlackメッセージタイムスタンプを取得
-        """
-        existing_inferences = crud.get_trade_inferences(db, skip=0, limit=10000)
-        return {inf.slack_message_ts for inf in existing_inferences if inf.slack_message_ts}
-    
-    def _fetch_slack_messages(self, lookback_hours: int) -> List[dict]:
-        """
-        Slackから指定時間内のメッセージを取得
-        """
-        try:
-            # 現在時刻から指定時間前までのタイムスタンプを計算
-            now = datetime.now()
-            oldest_timestamp = (now.timestamp() - (lookback_hours * 3600))
-            
-            response = self.client.conversations_history(
-                channel=self.channel_id,
-                oldest=str(oldest_timestamp),
-                limit=1000
-            )
-            
-            if response["ok"]:
-                return response["messages"]
-            else:
-                logger.error(f"Failed to fetch Slack messages: {response.get('error')}")
-                return []
-                
-        except SlackApiError as e:
-            logger.error(f"Slack API error: {e.response['error']}")
-            return []
-    
-    def _process_message(self, message: dict) -> Optional[schemas.TradeInferenceCreate]:
-        """
-        Slackメッセージを推論データに変換
-        """
-        message_ts = message.get('ts')
-        message_text = message.get('text', '')
-        
-        # メッセージがボットからの推論結果かどうかを判定
-        if not self._is_inference_message(message_text):
-            return None
-        
-        # メッセージの投稿時刻を取得
-        try:
-            inference_time = datetime.fromtimestamp(float(message_ts))
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid timestamp in message: {message_ts}")
-            return None
-        
-        # 添付ファイルからプロンプトを取得
-        prompt_content = self._extract_prompt_from_files(message)
-        if not prompt_content:
-            # プロンプトが見つからない場合は、メッセージテキスト自体をプロンプトとして使用
-            prompt_content = "プロンプト情報なし"
-        
-        # 推論アクションを解析
-        inferred_actions = self.inference_engine.parse_inference_response(message_text)
-        
-        return schemas.TradeInferenceCreate(
-            slack_message_ts=message_ts,
-            inference_time=inference_time,
-            prompt=prompt_content,
-            raw_response=message_text,
-            inferred_actions=inferred_actions
-        )
-    
-    def _is_inference_message(self, message_text: str) -> bool:
-        """
-        メッセージが推論結果かどうかを判定
-        """
-        # 推論メッセージの特徴的なキーワードをチェック
-        inference_keywords = [
-            'buy', 'sell', 'ポジション', '推奨', '取引',
-            'usdjpy', 'eurjpy', 'gbpjpy', 'audjpy',
-            'analysis', '分析', 'trend', 'トレンド'
-        ]
-        
-        message_lower = message_text.lower()
-        return any(keyword in message_lower for keyword in inference_keywords)
-    
-    def _extract_prompt_from_files(self, message: dict) -> Optional[str]:
-        """
-        メッセージの添付ファイルからプロンプト内容を取得
-        """
-        files = message.get('files', [])
-        
-        for file_info in files:
-            # テキストファイルのみを処理
-            if file_info.get('mimetype') == 'text/plain' or file_info.get('name', '').endswith('.txt'):
-                file_url = file_info.get('url_private')
-                if file_url:
-                    try:
-                        # Slackのファイルをダウンロード
-                        headers = {'Authorization': f'Bearer {self.slack_token}'}
-                        response = requests.get(file_url, headers=headers)
-                        
-                        if response.status_code == 200:
-                            return response.text
-                        else:
-                            logger.warning(f"Failed to download file {file_url}: {response.status_code}")
-                    except Exception as e:
-                        logger.error(f"Error downloading file {file_url}: {e}")
-        
-        return None
+# 環境変数の読み込み
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+SLACK_CHANNEL_ID = os.getenv("SLACK_CHANNEL_ID")
+SLACK_BOT_USER_ID = os.getenv("SLACK_BOT_USER_ID")
 
-def main():
-    """
-    メイン実行関数
-    """
+def collect_inferences():
+    if not SLACK_BOT_TOKEN or not SLACK_CHANNEL_ID:
+        print("Error: SLACK_BOT_TOKEN and SLACK_CHANNEL_ID must be set in environment variables")
+        return
+        
+    client = WebClient(token=SLACK_BOT_TOKEN)
+    db = next(database.get_db())
+    
+    print("Starting to collect inferences from Slack...")
+    
     try:
-        # データベーステーブルが存在することを確認
-        create_tables()
+        # 過去24時間分のメッセージを取得
+        oldest_timestamp = time.mktime((datetime.now() - timedelta(hours=24)).timetuple())
         
-        # Slack収集器を初期化
-        collector = SlackInferenceCollector()
+        response = client.conversations_history(
+            channel=SLACK_CHANNEL_ID,
+            oldest=oldest_timestamp,
+            limit=200 # 必要に応じて調整
+        )
         
-        # 新しい推論を収集（過去24時間）
-        new_count = collector.collect_new_inferences(lookback_hours=24)
+        messages = response['messages']
+        print(f"Found {len(messages)} messages in the last 24 hours.")
+
+        # メッセージを古い順に処理するため逆順にする
+        messages_reversed = list(reversed(messages))
         
-        logger.info(f"Inference collection completed. New records: {new_count}")
-        
+        for i, msg in enumerate(messages_reversed):
+            
+            # 1. 「使用プロンプト」メッセージを探す
+            if (msg.get('user') == SLACK_BOT_USER_ID and
+                '使用プロンプト' in msg.get('text', '') and
+                msg.get('files')):
+
+                prompt_message = msg
+                
+                # 2. DBにすでに存在するか確認
+                existing_inference = crud.get_inference_by_slack_ts(db, slack_ts=prompt_message['ts'])
+                if existing_inference:
+                    continue
+
+                # 3. ペアとなる「推論結果」メッセージを探す
+                inference_result_message = None
+                
+                # スレッド内の場合
+                if 'thread_ts' in prompt_message:
+                    try:
+                        thread_replies = client.conversations_replies(
+                            channel=SLACK_CHANNEL_ID,
+                            ts=prompt_message['thread_ts']
+                        )
+                        for reply in thread_replies['messages']:
+                            if '推論結果:' in reply.get('text', ''):
+                                inference_result_message = reply
+                                break
+                    except SlackApiError as e:
+                        print(f"Error fetching thread replies: {e}")
+                        
+                # スレッド外の場合 (直前のメッセージを確認)
+                if not inference_result_message and i > 0:
+                    prev_message = messages_reversed[i-1]
+                    if '推論結果:' in prev_message.get('text', ''):
+                        inference_result_message = prev_message
+
+                if not inference_result_message:
+                    print(f"Warning: Prompt message found at {prompt_message['ts']}, but no matching inference result message found.")
+                    continue
+
+                # 4. プロンプトファイルの内容を取得
+                prompt_text = ""
+                try:
+                    file_info = prompt_message['files'][0]
+                    if file_info.get('filetype') == 'text' or file_info.get('name', '').endswith('.txt'):
+                        file_response = client.files_info(file=file_info['id'])
+                        file_content_response = requests.get(
+                            file_response['file']['url_private'],
+                            headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                        )
+                        if file_content_response.status_code == 200:
+                            prompt_text = file_content_response.text
+                except Exception as e:
+                    print(f"Error retrieving file content: {e}")
+
+                if not prompt_text:
+                    print(f"Warning: Could not retrieve prompt text for message {prompt_message['ts']}. Using placeholder.")
+                    prompt_text = "プロンプト取得に失敗しました"
+
+                # 5. データベースに保存
+                try:
+                    inference_data = TradeInferenceCreate(
+                        slack_message_ts=prompt_message['ts'],
+                        inference_time=datetime.fromtimestamp(float(prompt_message['ts'])),
+                        prompt=prompt_text,
+                        raw_response=inference_result_message.get('text', ''),
+                        inferred_actions=[]  # 後で推論エンジンで解析される
+                    )
+                    crud.create_trade_inference(db, inference=inference_data)
+                    print(f"Success: New inference from {inference_data.inference_time} saved to DB.")
+                except Exception as e:
+                    print(f"Error saving inference to database: {e}")
+
+    except SlackApiError as e:
+        print(f"Error fetching messages from Slack: {e.response['error']}")
     except Exception as e:
-        logger.error(f"Inference collection failed: {e}")
-        sys.exit(1)
+        print(f"An unexpected error occurred: {e}")
+    finally:
+        db.close()
 
 if __name__ == "__main__":
-    main()
+    collect_inferences()

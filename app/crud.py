@@ -25,6 +25,10 @@ def get_trade_inference_by_slack_ts(db: Session, slack_ts: str) -> Optional[mode
     """Slackメッセージタイムスタンプで推論レコードを取得"""
     return db.query(models.TradeInference).filter(models.TradeInference.slack_message_ts == slack_ts).first()
 
+def get_inference_by_slack_ts(db: Session, slack_ts: str) -> Optional[models.TradeInference]:
+    """Slackメッセージタイムスタンプで推論レコードを取得（エイリアス）"""
+    return get_trade_inference_by_slack_ts(db, slack_ts)
+
 def get_trade_inferences(db: Session, skip: int = 0, limit: int = 100) -> List[models.TradeInference]:
     """推論レコード一覧を取得"""
     return db.query(models.TradeInference).offset(skip).limit(limit).all()

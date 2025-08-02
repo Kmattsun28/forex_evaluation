@@ -1,5 +1,3 @@
-# scripts/collect_inferences_from_slack.py
-
 import os
 import time
 import requests
@@ -20,8 +18,8 @@ SLACK_CHANNEL_ID = os.getenv("SLACK_CHANNEL_ID")
 SLACK_BOT_USER_ID = os.getenv("SLACK_BOT_USER_ID")
 
 def collect_inferences():
-    if not SLACK_BOT_TOKEN or not SLACK_CHANNEL_ID:
-        print("Error: SLACK_BOT_TOKEN and SLACK_CHANNEL_ID must be set in environment variables")
+    if not all([SLACK_BOT_TOKEN, SLACK_CHANNEL_ID, SLACK_BOT_USER_ID]):
+        print("Error: Slack environment variables (SLACK_BOT_TOKEN, SLACK_CHANNEL_ID, SLACK_BOT_USER_ID) must be set.")
         return
         
     client = WebClient(token=SLACK_BOT_TOKEN)
@@ -35,89 +33,84 @@ def collect_inferences():
         
         response = client.conversations_history(
             channel=SLACK_CHANNEL_ID,
-            oldest=oldest_timestamp,
-            limit=200 # 必要に応じて調整
+            oldest=str(oldest_timestamp),
+            limit=500 # 24時間以内のメッセージを十分にカバーできる数を指定
         )
         
         messages = response['messages']
         print(f"Found {len(messages)} messages in the last 24 hours.")
 
-        # メッセージを古い順に処理するため逆順にする
-        messages_reversed = list(reversed(messages))
+        # メッセージを時系列（古い順）にソート
+        messages.sort(key=lambda x: float(x.get('ts', 0)))
         
-        for i, msg in enumerate(messages_reversed):
-            
-            # 1. 「使用プロンプト」メッセージを探す
+        for i, msg in enumerate(messages):
+            # 1. 「使用プロンプト」メッセージを特定する
             if (msg.get('user') == SLACK_BOT_USER_ID and
                 '使用プロンプト' in msg.get('text', '') and
                 msg.get('files')):
 
                 prompt_message = msg
                 
-                # 2. DBにすでに存在するか確認
-                existing_inference = crud.get_inference_by_slack_ts(db, slack_ts=prompt_message['ts'])
-                if existing_inference:
+                # 2. DBにすでに存在するか確認 (重複防止)
+                if crud.get_inference_by_slack_ts(db, slack_ts=prompt_message['ts']):
                     continue
 
                 # 3. ペアとなる「推論結果」メッセージを探す
                 inference_result_message = None
                 
-                # スレッド内の場合
+                # スレッド内のメッセージを検索
                 if 'thread_ts' in prompt_message:
-                    try:
-                        thread_replies = client.conversations_replies(
-                            channel=SLACK_CHANNEL_ID,
-                            ts=prompt_message['thread_ts']
-                        )
-                        for reply in thread_replies['messages']:
-                            if '推論結果:' in reply.get('text', ''):
-                                inference_result_message = reply
+                    thread_replies_response = client.conversations_replies(
+                        channel=SLACK_CHANNEL_ID,
+                        ts=prompt_message['thread_ts']
+                    )
+                    for reply in thread_replies_response['messages']:
+                        if '推論結果:' in reply.get('text', '') and reply.get('user') == SLACK_BOT_USER_ID:
+                            inference_result_message = reply
+                            break
+                # スレッド外の場合、直前のBotメッセージを検索
+                else:
+                    # 自分より前のメッセージを逆順に探索
+                    for j in range(i - 1, -1, -1):
+                        prev_message = messages[j]
+                        # 自分と同じBotからのメッセージか確認
+                        if prev_message.get('user') == SLACK_BOT_USER_ID:
+                            if '推論結果:' in prev_message.get('text', ''):
+                                inference_result_message = prev_message
+                                break # 見つかったらループを抜ける
+                            # 別のプロンプトメッセージに到達したら、ペアではないので探索終了
+                            if '使用プロンプト' in prev_message.get('text', ''):
                                 break
-                    except SlackApiError as e:
-                        print(f"Error fetching thread replies: {e}")
-                        
-                # スレッド外の場合 (直前のメッセージを確認)
-                if not inference_result_message and i > 0:
-                    prev_message = messages_reversed[i-1]
-                    if '推論結果:' in prev_message.get('text', ''):
-                        inference_result_message = prev_message
-
+                
                 if not inference_result_message:
                     print(f"Warning: Prompt message found at {prompt_message['ts']}, but no matching inference result message found.")
                     continue
 
                 # 4. プロンプトファイルの内容を取得
                 prompt_text = ""
-                try:
-                    file_info = prompt_message['files'][0]
-                    if file_info.get('filetype') == 'text' or file_info.get('name', '').endswith('.txt'):
-                        file_response = client.files_info(file=file_info['id'])
-                        file_content_response = requests.get(
-                            file_response['file']['url_private'],
-                            headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
-                        )
-                        if file_content_response.status_code == 200:
-                            prompt_text = file_content_response.text
-                except Exception as e:
-                    print(f"Error retrieving file content: {e}")
+                file_info = prompt_message['files'][0]
+                if file_info.get('filetype') == 'text' or file_info.get('name', '').endswith('.txt'):
+                    file_content_response = requests.get(
+                        file_info.get('url_private'),
+                        headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                    )
+                    if file_content_response.status_code == 200:
+                        prompt_text = file_content_response.text
 
                 if not prompt_text:
-                    print(f"Warning: Could not retrieve prompt text for message {prompt_message['ts']}. Using placeholder.")
-                    prompt_text = "プロンプト取得に失敗しました"
+                    print(f"Warning: Could not retrieve prompt text for message {prompt_message['ts']}.")
+                    continue
 
                 # 5. データベースに保存
-                try:
-                    inference_data = TradeInferenceCreate(
-                        slack_message_ts=prompt_message['ts'],
-                        inference_time=datetime.fromtimestamp(float(prompt_message['ts'])),
-                        prompt=prompt_text,
-                        raw_response=inference_result_message.get('text', ''),
-                        inferred_actions=[]  # 後で推論エンジンで解析される
-                    )
-                    crud.create_trade_inference(db, inference=inference_data)
-                    print(f"Success: New inference from {inference_data.inference_time} saved to DB.")
-                except Exception as e:
-                    print(f"Error saving inference to database: {e}")
+                inference_data = TradeInferenceCreate(
+                    slack_message_ts=prompt_message['ts'],
+                    inference_time=datetime.fromtimestamp(float(prompt_message['ts'])),
+                    prompt=prompt_text,
+                    raw_response=inference_result_message.get('text', ''),
+                    inferred_actions=[] # この時点では空。評価エンジンで解析・入力する想定。
+                )
+                crud.create_trade_inference(db, inference=inference_data)
+                print(f"Success: New inference from {inference_data.inference_time} saved to DB.")
 
     except SlackApiError as e:
         print(f"Error fetching messages from Slack: {e.response['error']}")
@@ -128,3 +121,4 @@ def collect_inferences():
 
 if __name__ == "__main__":
     collect_inferences()
+

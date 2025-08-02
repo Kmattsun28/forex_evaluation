@@ -32,11 +32,11 @@ def run_script(script_path, *args):
 def start_scheduler():
     scheduler = BackgroundScheduler(timezone='Asia/Tokyo')
     
-    # 1. Slackからの推論ログ収集 (10分ごと)
+    # 1. Slackからの推論ログ収集 (1時間ごと)
     scheduler.add_job(
         run_script, 
         'interval', 
-        minutes=10, 
+        hours=1, # 10分から1時間に変更
         args=['scripts/collect_inferences_from_slack.py'],
         next_run_time=datetime.now()
     )
@@ -50,22 +50,22 @@ def start_scheduler():
         next_run_time=datetime.now()
     )
     
-    # 3. 日次レポートの生成 (毎日 AM 7:00 JST)
+    # 3. 日次レポートの生成 (毎日 AM 00:00 JST)
     scheduler.add_job(
         run_script,
         'cron',
-        hour=7,
+        hour=0, # 7時から0時に変更
         minute=0,
         args=['scripts/generate_report.py', '--period', 'daily']
     )
     
-    # 4. 週次レポートの生成 (毎週月曜 AM 7:30 JST)
+    # 4. 週次レポートの生成 (毎週土曜日の 12:00 JST)
     scheduler.add_job(
         run_script,
         'cron',
-        day_of_week='mon',
-        hour=7,
-        minute=30,
+        day_of_week='sat', # monからsatに変更
+        hour=12,           # 7時から12時に変更
+        minute=0,          # 30分から0分に変更
         args=['scripts/generate_report.py', '--period', 'weekly']
     )
     

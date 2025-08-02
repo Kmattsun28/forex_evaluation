@@ -1,3 +1,5 @@
+# scripts/collect_inferences_from_slack.py
+
 import os
 import time
 import requests
@@ -44,7 +46,7 @@ def collect_inferences():
         messages.sort(key=lambda x: float(x.get('ts', 0)))
         
         for i, msg in enumerate(messages):
-            # 1. 「使用プロンプト」メッセージを特定する
+            # 1. 「使用プロンプト」メッセージを特定する (これが推論ログの起点)
             if (msg.get('user') == SLACK_BOT_USER_ID and
                 '使用プロンプト' in msg.get('text', '') and
                 msg.get('files')):
@@ -68,7 +70,7 @@ def collect_inferences():
                         if '推論結果:' in reply.get('text', '') and reply.get('user') == SLACK_BOT_USER_ID:
                             inference_result_message = reply
                             break
-                # スレッド外の場合、直前のBotメッセージを検索
+                # スレッド外の場合、直前のBotメッセージを検索 (間に他のメッセージがあってもOK)
                 else:
                     # 自分より前のメッセージを逆順に探索
                     for j in range(i - 1, -1, -1):
@@ -121,4 +123,3 @@ def collect_inferences():
 
 if __name__ == "__main__":
     collect_inferences()
-

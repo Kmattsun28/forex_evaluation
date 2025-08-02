@@ -1,0 +1,23 @@
+# docker-compose.yml
+version: '3.9'
+services:
+  forex:
+    build: .
+    runtime: nvidia
+    container_name: forex_evaluation_system
+    volumes:
+      - .:/app  # ソースコードの同期
+      - ./db:/app/db  # SQLiteデータベースの永続化
+      # 【更新】指定された絶対パスから取引履歴JSONをマウント
+      - /mnt/bigdata/00_students/aoi_ucl/forex_competition2025/llm_real_transaction:/app/deal_log
+      - /mnt/bigdata/00_students/aoi_ucl/forex/models_cache:/app/models_cache # モデルキャッシュ
+    ports:
+      - "18000:8000" # 既存のポートマッピングを維持 (ホスト:18000 -> コンテナ:8000)
+    env_file:
+      - .env # .envファイルから環境変数を読み込む
+    environment:
+      - DB_PATH=sqlite:///./db/forex.sqlite # コンテナ内のDBパス
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HF_HOME=/app/models_cache # Hugging Faceのキャッシュパス
+    restart: always
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

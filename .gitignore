@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.pyo
+*.sqlite
+*.log
+# *.txt
+*.csv
+/data/
+/db/
+/models_cache/
+.env
+.DS_Store
+# Docker
+*.pid
+# Jupyter
+.ipynb_checkpoints/
+*.pdf

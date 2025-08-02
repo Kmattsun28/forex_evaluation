@@ -66,6 +66,20 @@ class TradeImporter:
                     trade_create = self._normalize_trade_record(trade_record)
                     
                     if trade_create:
+                        # 【修正点】データベースに同じ取引が既に存在するか確認
+                        existing_trade = crud.get_actual_trade_by_details(
+                            db,
+                            trade_time=trade_create.trade_time,
+                            pair=trade_create.pair,
+                            action=trade_create.action,
+                            entry_price=trade_create.entry_price,
+                            amount=trade_create.amount
+                        )
+                        
+                        if existing_trade:
+                            # 既に存在する場合はスキップ
+                            continue
+
                         # 最も近い推論との紐付けを試行
                         inference_id = self._find_matching_inference(db, trade_create.trade_time)
                         if inference_id:
@@ -79,7 +93,7 @@ class TradeImporter:
                     logger.error(f"Failed to import trade record {trade_record}: {e}")
                     continue
             
-            logger.info(f"Successfully imported {imported_count} trades")
+            logger.info(f"Successfully imported {imported_count} new trades")
             return imported_count
             
         finally:

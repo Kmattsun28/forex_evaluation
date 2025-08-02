@@ -66,6 +66,20 @@ def find_closest_inference_for_trade(db: Session, trade_time: datetime, time_win
         func.abs(models.TradeInference.inference_time - trade_time)
     ).first()
 
+# 【ここから追加】
+def get_actual_trade_by_details(db: Session, trade_time: datetime, pair: str, action: str, entry_price: float, amount: float) -> Optional[models.ActualTrade]:
+    """取引の詳細情報を使って、既存の取引レコードを検索する"""
+    return db.query(models.ActualTrade).filter(
+        and_(
+            models.ActualTrade.trade_time == trade_time,
+            models.ActualTrade.pair == pair,
+            models.ActualTrade.action == action,
+            models.ActualTrade.entry_price == entry_price,
+            models.ActualTrade.amount == amount
+        )
+    ).first()
+# 【ここまで追加】
+
 # --- TradeEvaluation CRUD操作 ---
 
 def create_trade_evaluation(db: Session, evaluation: schemas.TradeEvaluationCreate) -> models.TradeEvaluation:

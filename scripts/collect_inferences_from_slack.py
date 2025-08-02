@@ -1,5 +1,6 @@
 # scripts/collect_inferences_from_slack.py
 
+
 import os
 import time
 import requests
@@ -30,22 +31,36 @@ def collect_inferences():
     print("Starting to collect inferences from the last 12 hours from Slack...")
     
     try:
-        # 【修正点】過去12時間分のメッセージを取得するように変更
+        # 【修正点】過去12時間分のメッセージをページネーションですべて取得する
         oldest_timestamp = time.mktime((datetime.now() - timedelta(hours=12)).timetuple())
         
-        response = client.conversations_history(
-            channel=SLACK_CHANNEL_ID,
-            oldest=str(oldest_timestamp),
-            limit=500, # 12時間以内のメッセージを十分にカバーできる数を指定
-            inclusive=True # oldestを含める
-        )
+        all_messages = []
+        cursor = None
         
+        while True:
+            response = client.conversations_history(
+                channel=SLACK_CHANNEL_ID,
+                oldest=str(oldest_timestamp),
+                cursor=cursor,
+                limit=200, # 一度に取得するメッセージ数
+                inclusive=True
+            )
+            
+            messages_page = response.get('messages', [])
+            all_messages.extend(messages_page)
+            
+            if not response.get('has_more'):
+                break
+                
+            cursor = response.get('response_metadata', {}).get('next_cursor')
+            print(f"Fetched {len(messages_page)} messages, getting next page for this time window...")
+            time.sleep(1) # APIレートリミットを避ける
+
         # APIはデフォルトで新しい順にメッセージを返す
-        messages = response.get('messages', [])
-        print(f"Found {len(messages)} messages in the last 12 hours.")
+        print(f"Found a total of {len(all_messages)} messages in the last 12 hours.")
         
         # 新しい順に処理
-        for i, msg in enumerate(messages):
+        for i, msg in enumerate(all_messages):
             # 1. 「推論結果」メッセージを特定する
             if (msg.get('user') == SLACK_BOT_USER_ID and '推論結果:' in msg.get('text', '')):
                 
@@ -56,7 +71,6 @@ def collect_inferences():
                 # スレッド内のメッセージを検索
                 if 'thread_ts' in inference_result_message:
                     # スレッドの親メッセージがプロンプトであると仮定
-                    # より堅牢にするにはスレッド内の全メッセージを確認する必要がある
                     if inference_result_message['thread_ts'] == inference_result_message['ts']:
                         continue # 自分自身なのでスキップ
                     
@@ -74,8 +88,8 @@ def collect_inferences():
                 else:
                     # スレッド外の場合、直後の「使用プロンプト」メッセージを探す
                     # APIは新しい順なので、インデックスが後のものが時間的には古いメッセージ
-                    for j in range(i + 1, len(messages)):
-                        next_message = messages[j]
+                    for j in range(i + 1, len(all_messages)):
+                        next_message = all_messages[j]
                         if next_message.get('user') == SLACK_BOT_USER_ID:
                             if '使用プロンプト' in next_message.get('text', '') and next_message.get('files'):
                                 prompt_message = next_message
@@ -85,7 +99,7 @@ def collect_inferences():
                                 break
                 
                 if not prompt_message:
-                    print(f"Warning: Inference result found at {inference_result_message['ts']}, but no matching prompt message found.")
+                    # print(f"Warning: Inference result found at {inference_result_message['ts']}, but no matching prompt message found.")
                     continue
 
                 # 3. DBにすでに存在するか確認 (重複防止)
@@ -94,17 +108,18 @@ def collect_inferences():
 
                 # 4. プロンプトファイルの内容を取得
                 prompt_text = ""
-                file_info = prompt_message['files'][0]
-                if file_info.get('filetype') == 'text' or file_info.get('name', '').endswith('.txt'):
-                    file_content_response = requests.get(
-                        file_info.get('url_private'),
-                        headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
-                    )
-                    if file_content_response.status_code == 200:
-                        prompt_text = file_content_response.text
+                if prompt_message.get('files'):
+                    file_info = prompt_message['files'][0]
+                    if file_info.get('filetype') == 'text' or file_info.get('name', '').endswith('.txt'):
+                        file_content_response = requests.get(
+                            file_info.get('url_private'),
+                            headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                        )
+                        if file_content_response.status_code == 200:
+                            prompt_text = file_content_response.text
 
                 if not prompt_text:
-                    print(f"Warning: Could not retrieve prompt text for message {prompt_message['ts']}.")
+                    # print(f"Warning: Could not retrieve prompt text for message {prompt_message['ts']}.")
                     continue
 
                 # 5. データベースに保存
@@ -113,7 +128,7 @@ def collect_inferences():
                     inference_time=datetime.fromtimestamp(float(prompt_message['ts'])),
                     prompt=prompt_text,
                     raw_response=inference_result_message.get('text', ''),
-                    inferred_actions=[] # この時点では空。評価エンジンで解析・入力する想定。
+                    inferred_actions=[]
                 )
                 crud.create_trade_inference(db, inference=inference_data)
                 print(f"Success: New inference from {inference_data.inference_time} saved to DB.")

@@ -1,5 +1,5 @@
 # Dockerfile
-FROM nvidia/cuda:11.8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
 # システムの更新とPythonのインストール
 RUN apt-get update && apt-get install -y \

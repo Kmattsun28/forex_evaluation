@@ -12,7 +12,7 @@ services:
       - /mnt/bigdata/00_students/aoi_ucl/forex_competition2025/llm_real_transaction:/app/deal_log
       - /mnt/bigdata/00_students/aoi_ucl/forex/models_cache:/app/models_cache # モデルキャッシュ
     ports:
-      - "18000:8000" # 既存のポートマッピングを維持 (ホスト:18000 -> コンテナ:8000)
+      - "19000:8000" # 既存のポートマッピングを維持 (ホスト:18000 -> コンテナ:8000)
     env_file:
       - .env # .envファイルから環境変数を読み込む
     environment:

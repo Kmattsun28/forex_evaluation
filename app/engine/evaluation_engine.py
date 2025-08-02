@@ -142,31 +142,25 @@ class EvaluationEngine:
         Returns:
             潜在損益（仮想的な計算）
         """
-        # 簡易版：推論の強度と市場の典型的な変動を基に概算
-        # 実際の実装では、推論時点の市場データと現在/将来の価格を比較する
+        # 【未実装・簡易版】: 現在は推論の強度と市場の典型的な変動を基に概算しています。
+        # 本格的な実装では、この関数内で推論時点から数時間後の実際の価格データを
+        # データベースから取得し、それと比較して仮想的な損益を計算する必要があります。
         
         if not inference.inferred_actions:
             return 0.0
         
-        # 推論アクションから最初の行動を取得
         actions = inference.inferred_actions
         if not actions or len(actions) == 0:
             return 0.0
         
         first_action = actions[0]
         confidence = first_action.get('confidence', 0.5)
-        
-        # 信頼度に基づく簡易的な潜在利益計算
-        # 実際の市場データがないため、統計的な期待値を使用
-        base_return = 0.01  # 1%のベース期待収益
-        
+        base_return = 0.01
         potential_return = base_return * confidence
+        risk_adjustment = 0.8
         
-        # リスク調整（高信頼度でも市場リスクを考慮）
-        risk_adjustment = 0.8  # 80%のリスク調整係数
-        
-        return potential_return * risk_adjustment * 10000  # 1万通貨単位での計算
-    
+        return potential_return * risk_adjustment * 10000
+
     def _analyze_actual_performance(self, actual_trades: List[ActualTrade]) -> str:
         """
         実績取引のパフォーマンスを分析

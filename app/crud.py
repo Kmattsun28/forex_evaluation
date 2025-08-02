@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func  # 'func' をインポート
 
 from . import models, schemas
 
@@ -55,15 +55,15 @@ def find_closest_inference_for_trade(db: Session, trade_time: datetime, time_win
     """取引時刻に最も近い推論を検索（時間窓内）"""
     start_time = trade_time - timedelta(hours=time_window_hours)
     end_time = trade_time + timedelta(hours=time_window_hours)
-    
+
     return db.query(models.TradeInference).filter(
         and_(
             models.TradeInference.inference_time >= start_time,
             models.TradeInference.inference_time <= end_time
         )
     ).order_by(
-        # 取引時刻に最も近い推論を選択
-        abs(models.TradeInference.inference_time - trade_time)
+        # Pythonのabs()ではなく、SQLAlchemyのfunc.abs()を使用
+        func.abs(models.TradeInference.inference_time - trade_time)
     ).first()
 
 # --- TradeEvaluation CRUD操作 ---
@@ -105,44 +105,29 @@ def get_performance_summary(db: Session, start_date: datetime, end_date: datetim
             models.ActualTrade.profit_loss.isnot(None)  # 決済済みの取引のみ
         )
     ).all()
-    
+
     if not trades:
         return {
-            "total_trades": 0,
-            "winning_trades": 0,
-            "losing_trades": 0,
-            "win_rate": 0.0,
-            "total_profit_loss": 0.0,
-            "average_profit": 0.0,
-            "average_loss": 0.0,
-            "profit_factor": 0.0
+            "total_trades": 0, "winning_trades": 0, "losing_trades": 0, "win_rate": 0.0,
+            "total_profit_loss": 0.0, "average_profit": 0.0, "average_loss": 0.0, "profit_factor": 0.0
         }
-    
+
     # 統計計算
     total_trades = len(trades)
     winning_trades = len([t for t in trades if t.profit_loss > 0])
     losing_trades = len([t for t in trades if t.profit_loss < 0])
-    
     total_profit_loss = sum(t.profit_loss for t in trades)
-    
     profits = [t.profit_loss for t in trades if t.profit_loss > 0]
     losses = [t.profit_loss for t in trades if t.profit_loss < 0]
-    
     average_profit = sum(profits) / len(profits) if profits else 0.0
     average_loss = sum(losses) / len(losses) if losses else 0.0
-    
-    # プロフィットファクター = 総利益 / 総損失の絶対値
     total_profits = sum(profits)
     total_losses = abs(sum(losses))
     profit_factor = total_profits / total_losses if total_losses > 0 else float('inf')
-    
+
     return {
-        "total_trades": total_trades,
-        "winning_trades": winning_trades,
-        "losing_trades": losing_trades,
+        "total_trades": total_trades, "winning_trades": winning_trades, "losing_trades": losing_trades,
         "win_rate": winning_trades / total_trades * 100 if total_trades > 0 else 0.0,
-        "total_profit_loss": total_profit_loss,
-        "average_profit": average_profit,
-        "average_loss": average_loss,
-        "profit_factor": profit_factor
+        "total_profit_loss": total_profit_loss, "average_profit": average_profit,
+        "average_loss": average_loss, "profit_factor": profit_factor
     }

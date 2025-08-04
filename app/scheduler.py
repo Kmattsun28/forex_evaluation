@@ -80,6 +80,13 @@ class ForexEvaluationScheduler:
             max_instances=1, coalesce=True
         )
         
+        # 6. 【新規追加】資産状況・評価損益計算（10分ごと）
+        self.scheduler.add_job(
+            id='calculate_holdings_pnl', func=_run_script, trigger=IntervalTrigger(minutes=10),
+            args=['scripts/calculate_holdings_pnl.py'], name="Calculate holdings and P&L",
+            max_instances=1, coalesce=True, next_run_time=datetime.now()
+        )
+        
         self.scheduler.start()
         logger.info("All scheduled jobs started successfully")
 

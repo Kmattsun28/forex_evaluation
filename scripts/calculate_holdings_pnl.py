@@ -221,7 +221,42 @@ def calculate_holdings_and_pnl() -> Dict:
     return result
 
 def format_report(data: Dict) -> str:
-    """レポートを見やすい形式に整形"""
+    """レポートを見やすい形式に整形し、アラート条件をチェックする"""
+    initial_assets = 100000.0
+    TOTAL_ASSETS_PROFIT_THRESHOLD = float(os.getenv("TOTAL_ASSETS_PROFIT_THRESHOLD", 1.10))
+    TOTAL_ASSETS_LOSS_THRESHOLD = float(os.getenv("TOTAL_ASSETS_LOSS_THRESHOLD", 0.925))
+    USD_PNL_ALERT_YEN = float(os.getenv("USD_PNL_ALERT_YEN", 1500))
+    EUR_PNL_ALERT_YEN = float(os.getenv("EUR_PNL_ALERT_YEN", 1500))
+
+    alert_reasons = []
+    
+    total_assets_jpy = data.get('total_assets_jpy', 0.0)
+    unrealized_pnl_usd = data['unrealized_pnl'].get('USD', 0.0)
+    unrealized_pnl_eur = data['unrealized_pnl'].get('EUR', 0.0)
+
+    if total_assets_jpy > initial_assets * TOTAL_ASSETS_PROFIT_THRESHOLD:
+        profit_percentage = ((total_assets_jpy / initial_assets) - 1) * 100
+        alert_reasons.append(f"🎉 長期目標: 総資産が初期比{profit_percentage:+.1f}%に到達！")
+
+    if total_assets_jpy < initial_assets * TOTAL_ASSETS_LOSS_THRESHOLD:
+        loss_percentage = ((total_assets_jpy / initial_assets) - 1) * 100
+        alert_reasons.append(f"🔥 長期リスク: 総資産が初期比{loss_percentage:.1f}%まで減少。戦略の見直しを推奨。")
+
+    if abs(unrealized_pnl_usd) > USD_PNL_ALERT_YEN:
+        alert_reasons.append(f"📈 短期変動: USDの評価損益が {unrealized_pnl_usd:+,.0f} 円！")
+
+    if abs(unrealized_pnl_eur) > EUR_PNL_ALERT_YEN:
+        alert_reasons.append(f"📉 短期変動: EURの評価損益が {unrealized_pnl_eur:+,.0f} 円！")
+
+    report = ""
+    if alert_reasons:
+        report += "<!channel>\n"
+        for reason in alert_reasons:
+            report += f"🚨 **アラート: {reason}**\n"
+        report += "\n"
+
+
+    # --- レポートの整形 ---
     report = "📊 **為替取引 資産状況・評価損益レポート**\n"
     report += f"🕒 更新時刻: {data['timestamp'][:19].replace('T', ' ')}\n\n"
     

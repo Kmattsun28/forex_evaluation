@@ -10,7 +10,8 @@ import logging
 import requests
 import yfinance as yf
 from bs4 import BeautifulSoup
-from datetime import datetime
+from datetime import datetime, timezone # timezone をインポート
+from zoneinfo import ZoneInfo # zoneinfo をインポート
 from typing import Dict, Optional
 
 # ログ設定
@@ -166,7 +167,8 @@ def calculate_holdings_and_pnl() -> Dict:
     
     # 評価損益計算
     result = {
-        'timestamp': datetime.now().isoformat(),
+        # ▼▼▼ 変更点 1: タイムスタンプをUTCで生成 ▼▼▼
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'holdings': holdings,
         'costs': costs,
         'realized_pnl': realized_pnl,
@@ -255,10 +257,14 @@ def format_report(data: Dict) -> str:
             report += f"🚨 **アラート: {reason}**\n"
         report += "\n"
 
-
     # --- レポートの整形 ---
-    report = "📊 **為替取引 資産状況・評価損益レポート**\n"
-    report += f"🕒 更新時刻: {data['timestamp'][:19].replace('T', ' ')}\n\n"
+    report += "📊 **為替取引 資産状況・評価損益レポート**\n" # アラートがない場合、ここからレポートが始まる
+
+    # ▼▼▼ 変更点 2: UTCタイムスタンプをJSTに変換してフォーマット ▼▼▼
+    utc_dt = datetime.fromisoformat(data['timestamp'])
+    jst_dt = utc_dt.astimezone(ZoneInfo("Asia/Tokyo"))
+    jst_str = jst_dt.strftime('%Y-%m-%d %H:%M:%S')
+    report += f"🕒 更新時刻: {jst_str} (JST)\n\n"
     
     # 現在の保有残高
     report += "💰 **現在の保有残高**\n"

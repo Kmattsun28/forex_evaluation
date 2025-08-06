@@ -18,13 +18,6 @@ from typing import Dict, Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 設定
-SPREAD_CONFIG = {
-    "USDJPY": 0.15,
-    "EURJPY": 0.15, 
-    "EURUSD": 0.0018
-}
-
 def get_rate_from_google(pair: str) -> Optional[float]:
     """Google Financeから為替レートを取得"""
     try:
@@ -129,7 +122,7 @@ def calculate_holdings_and_pnl() -> Dict:
             pair = t['currency_pair']
             amount = t['amount']
             rate = t['rate']
-            spread = SPREAD_CONFIG.get(pair, 0)
+            spread = 0
             
             if amount > 0:  # 買い取引
                 cost_per_unit = rate + spread
